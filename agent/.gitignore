@@ -32,3 +32,9 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 
 # Finder (MacOS) folder config
 .DS_Store
+
+# agent runtime data (student profile + food log) and local logs
+nutrition-data.json
+chat-history.json
+.env*
+!.env.example

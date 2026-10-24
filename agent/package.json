@@ -2,6 +2,8 @@
   "name": "sbuhack2026",
   "private": true,
   "scripts": {
+    "start": "bun run agent.ts",
+    "test": "bun test",
     "typecheck": "bun check"
   },
   "devDependencies": {

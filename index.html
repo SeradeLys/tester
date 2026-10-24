@@ -451,6 +451,11 @@ const CONFIG = {
   hallImages: { west: "", east: "" },
   // Chatbot icon: replace with your own image path (an uploaded asset "/_blob/<id>" or a data: URI). Empty = placeholder image.
   chatIcon: "",
+  // Wolfie Butler chat backend (the Gemini + Photon agent in ./agent). The chat box POSTs { text, sessionId, page } here
+  // and shows { reply }. For a deployed site, set this to the agent's public https address (e.g. a tunnel URL ending in /chat).
+  // Set to "" to skip the backend and use the claude.ai runtime instead (only works inside claude.ai).
+  agentUrl: "http://localhost:8787/chat",
+  agentTimeoutMs: 90000,
   dayShares: { Breakfast: 0.25, Lunch: 0.35, Dinner: 0.40 },
   calTolerance: 50,
   carbPct: [0.45, 0.65],
@@ -1432,7 +1437,49 @@ Rules:
 - If a menu is "not loaded", tell them to import it on the Dining menus page.
 CONTEXT:
 ${this.context()}`; },
+  /* ---- Real backend (./agent) ---- */
+  sessionId(){
+    try { let id = localStorage.getItem("wb.sessionId"); if (!id) { id = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(36).slice(2)); localStorage.setItem("wb.sessionId", id); } return id; }
+    catch { return this._sid || (this._sid = String(Date.now()) + Math.random().toString(36).slice(2)); }
+  },
+  // What the student sees right now. The backend fetches menus itself, so this stays small (the server keeps at most 6000 characters).
+  pageContext(){
+    const t = targets(), n = NutritionService.calculateMealNutrition(S.plan.items), p = S.profile;
+    const build = items => JSON.stringify({ selected:{ hall:CONFIG.halls[S.hall].name, date:S.date },
+      siteProfile: p ? { goal:p.goal||null, diet:p.diet, allergies:p.allergies, activity:p.activity||null } : null,
+      siteTargets:{ kcal:t.cal, protein_g:t.protein, carbs_g:t.carbs, fat_g:t.fat, fiber_g:t.fiber },
+      mealPlan: items.map(i => `${i.servings} x ${i.name} (${CONFIG.halls[i.hall].short}, ${i.date}) ${fmt(NutritionService.isNum(i.nutr.cal)?i.nutr.cal*i.servings:null)} kcal`),
+      planTotals:n.totals, favourites:Object.values(S.favs).map(f => f.name).slice(0, 15) });
+    let items = S.plan.items, s = build(items);
+    while (s.length > 5800 && items.length) { items = items.slice(0, -1); s = build(items); }
+    return s.slice(0, 5800);
+  },
+  async sendToBackend(text){
+    S.chat.push({ role:"user", content:text }); S.chatBusy = true; paintMsgs(); paintComposer();
+    this.ctl = new AbortController();
+    const timer = setTimeout(() => this.ctl.abort(), CONFIG.agentTimeoutMs);
+    const fail = content => S.chat.push({ role:"assistant", content, local:true });
+    try {
+      let res;
+      try {
+        res = await fetch(CONFIG.agentUrl, { method:"POST", headers:{ "content-type":"application/json" }, signal:this.ctl.signal,
+          body: JSON.stringify({ text, sessionId:this.sessionId(), page:this.pageContext() }) });
+      } catch (e) {
+        if (e?.name === "AbortError") fail("The agent took too long to answer. Try again in a moment.");
+        else fail(`I can't reach the Wolfie Butler agent at ${CONFIG.agentUrl}. Start it with "cd agent && bun run start" (see the README), or check that agentUrl in CONFIG points to the running agent. If the site and the agent are on different addresses, the agent's WEB_CHAT_ORIGINS must include this site's address.`);
+        return;
+      }
+      let data = {}; try { data = await res.json(); } catch {}
+      if (!res.ok) { fail(data.error || `The agent returned an error (HTTP ${res.status}). Check the agent's terminal for details.`); return; }
+      const reply = typeof data.reply === "string" ? data.reply.trim() : "";
+      if (!reply) { fail("The agent answered with an empty message. Try asking again."); return; }
+      S.chat.push({ role:"assistant", content:reply }); speak(reply);
+    } finally {
+      clearTimeout(timer); S.chatBusy = false; paintMsgs(); paintComposer(); paintNavCounts();
+    }
+  },
   async send(text){
+    if (CONFIG.agentUrl) return this.sendToBackend(text);
     const sample = await (window.claude?.use ? window.claude.use("sample").catch(()=>null) : null);
     S.chat.push({ role:"user", content:text }); S.chatBusy = true; paintMsgs(); paintComposer();
     if (!sample) { S.chat.push({ role:"assistant", content:"The agent isn't available in this view. Open Wolfie Butler in Claude while signed in to chat. You can still copy the agent brief for your Photon iMessage agent." }); S.chatBusy = false; paintMsgs(); paintComposer(); return; }

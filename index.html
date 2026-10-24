@@ -1664,6 +1664,22 @@ function migratePlan(items){
   Store.watch("site", docs => { S.site = docs.find(d => d._id === "config") || {}; if (S.view === "overview" && !document.querySelector(".scrim")) render(); if (!S.chatOpen) paintWidget(); });
   Store.watch("recipes", docs => { S.recipes = docs.filter(r => r && r.title).sort((a,b) => (a.order ?? 99) - (b.order ?? 99) || String(a.title).localeCompare(b.title));
     if (!document.querySelector(".scrim") && !document.activeElement?.closest?.("form")) render(); });
+  /* TEMP demo seed: outside Claude's preview there is no cloud db (Store.mode === "device"), so nothing ever fills `menus`.
+     Load the bundled Nutrislice-parsed files in data/ once. Needs the site served over http(s); fetch() is blocked on file://. */
+  if (Store.mode === "device") {
+    console.info("[menu-diag] mode=device, location.protocol=" + location.protocol + ", date=" + todayISO());
+    for (const hall of Object.keys(CONFIG.halls)) {
+      const key = menuKey(hall, todayISO()); if (S.menus[key]) { console.info("[menu-diag] already stored:", key); continue; }
+      const url = `data/${hall}--${todayISO()}.json`;
+      try {
+        const res = await fetch(url); console.info("[menu-diag] GET", url, "->", res.status);
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const d = await res.json(); console.info("[menu-diag] keys:", Object.keys(d), "items:", Array.isArray(d.items) ? d.items.length : "n/a");
+        if (!d || !Array.isArray(d.items)) throw new Error("unexpected structure");
+        const doc = { ...d, importedAt:new Date().toISOString() }; S.menus[key] = doc; await Store.saveShared("menus", key, doc);
+      } catch (e) { console.error("[menu-diag] failed to load", url, "-", e.message, location.protocol === "file:" ? "(file:// blocks fetch: serve the folder over http, e.g. `npx serve .`)" : ""); }
+    }
+  }
   paintNav(); render(); if (!document.querySelector("#wolfie .wb-panel.opening")) paintWidget(); else setTimeout(() => { if (S.chatOpen && !wbClosing) paintWidget(); }, 650);
 })();
 </script>
